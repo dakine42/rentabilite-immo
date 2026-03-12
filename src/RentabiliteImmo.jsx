@@ -2325,7 +2325,7 @@ export default function App() {
       <style>{css}</style>
       {/* Header */}
       <div className="no-print" style={{ background: T.surface, borderBottom: `1px solid ${T.border}`, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12 }}>
-        <button className="mobile-header-btn" onClick={() => setSidebarOpen(true)} style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", fontSize: 16, color: T.gold }}>⚙️</button>
+        <button className="mobile-header-btn" onClick={() => setSidebarOpen(true)} style={{ background: T.gold, border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", fontSize: 20, color: T.bg, fontWeight: 900, minWidth: 48, minHeight: 48 }}>⚙️</button>
         <div>
           <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: "0.2em", textTransform: "uppercase" }}>Simulateur pro</div>
           <h1 style={{ margin: 0, fontSize: 17, fontWeight: 400, fontFamily: "DM Serif Display, serif" }}>🏠 Rentabilité <span style={{ color: T.gold }}>Immo</span></h1>
