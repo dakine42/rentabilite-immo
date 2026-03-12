@@ -173,7 +173,7 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans texte autour, sans markdown.
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key":sk-ant-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 || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: { "Content-Type": "application/json", "x-api-key": process.env.REACT_APP_ANTHROPIC_API_KEY || "", "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
     body: JSON.stringify({
       model: "claude-sonnet-4-5",
       max_tokens: 2000,
