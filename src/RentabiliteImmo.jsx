@@ -287,11 +287,32 @@ function STitle({ children, accent = T.gold }) {
   return <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}><div style={{ width: 3, height: 18, background: accent, borderRadius: 2 }} /><h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.text, fontFamily: "DM Serif Display, serif" }}>{children}</h2></div>;
 }
 function Input({ label, value, onChange, suffix, step = 1, min = 0 }) {
+  const [localVal, setLocalVal] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+  // Sync from parent only when not focused
+  if (!focused && String(value) !== localVal && !localVal.endsWith(".") && !localVal.endsWith(",")) {
+    setLocalVal(String(value));
+  }
   return (
     <div style={{ marginBottom: 11 }}>
       <label style={{ display: "block", fontSize: 11, color: T.textMuted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>{label}</label>
       <div style={{ display: "flex", alignItems: "center", background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 9, overflow: "hidden" }}>
-        <input type="number" value={value} min={min} step={step} onChange={e => onChange(parseFloat(e.target.value) || 0)} onFocus={e => e.target.select()} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); const inputs = Array.from(document.querySelectorAll("input")); const idx = inputs.indexOf(e.target); if (idx >= 0 && idx < inputs.length - 1) inputs[idx + 1].focus(); } }} style={{ flex: 1, border: "none", background: "transparent", padding: "8px 11px", fontSize: 13, color: T.text, fontFamily: "DM Sans, sans-serif", fontWeight: 500, outline: "none" }} />
+        <input
+          type="text"
+          inputMode="decimal"
+          value={localVal}
+          onChange={e => {
+            const raw = e.target.value;
+            setLocalVal(raw);
+            const normalized = raw.replace(",", ".");
+            const parsed = parseFloat(normalized);
+            if (!isNaN(parsed)) onChange(parsed);
+          }}
+          onFocus={e => { setFocused(true); e.target.select(); }}
+          onBlur={() => { setFocused(false); setLocalVal(String(value)); }}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); const inputs = Array.from(document.querySelectorAll("input")); const idx = inputs.indexOf(e.target); if (idx >= 0 && idx < inputs.length - 1) inputs[idx + 1].focus(); } }}
+          style={{ flex: 1, border: "none", background: "transparent", padding: "8px 11px", fontSize: 13, color: T.text, fontFamily: "DM Sans, sans-serif", fontWeight: 500, outline: "none" }}
+        />
         {suffix && <span style={{ padding: "0 9px", color: T.textMuted, fontSize: 11 }}>{suffix}</span>}
       </div>
     </div>
@@ -1986,9 +2007,8 @@ function MarchandBiens({ bien, res }) {
 function CalculateurTRI({ bien, res }) {
   const [tauxReval, setTauxReval] = useState(2);
   const [anneeRevente, setAnneeRevente] = useState(10);
-
-  const surface = bien.typeBien === "Immeuble" && bien.lots?.length
-    ? bien.lots.reduce((s, l) => s + (l.surface || 0), 0) : bien.surface;
+  const valeurApresTravauxDefault = bien.prix + (bien.travaux || 0);
+  const [valeurApresTravaux, setValeurApresTravaux] = useState(valeurApresTravauxDefault);
 
   const loyerMensuel = bien.typeBien === "Immeuble" && bien.lots?.length
     ? bien.lots.reduce((s, l) => s + (l.loyer || 0), 0) : bien.loyer;
@@ -2008,17 +2028,27 @@ function CalculateurTRI({ bien, res }) {
 
   const triData = useMemo(() => {
     const results = [];
+    const baseRevente = valeurApresTravaux > 0 ? valeurApresTravaux : bien.prix;
     for (let annee = 3; annee <= Math.min(bien.duree, 25); annee++) {
-      const rev = calculerRevente(bien, res, annee, tauxReval);
+      // Utiliser valeurApresTravaux comme base de revalorisation
+      const prixRevente = baseRevente * Math.pow(1 + tauxReval / 100, annee);
+      const prixAchatNet = res.notaire + bien.travaux;
+      const plusValueBrute = Math.max(0, prixRevente - prixAchatNet);
+      const abatIR = annee <= 5 ? 0 : annee <= 21 ? (annee - 5) * 6 : 100;
+      const abatPS = annee <= 5 ? 0 : annee <= 21 ? (annee - 5) * 1.65 : 100;
+      const pvImposableIR = plusValueBrute * (1 - Math.min(abatIR, 100) / 100);
+      const pvImposablePS = plusValueBrute * (1 - Math.min(abatPS, 100) / 100);
+      const impotPV = pvImposableIR * 0.19 + pvImposablePS * 0.172;
+
       const fluxInitial = -(res.aEmprunter > 0 ? bien.apport + bien.travaux : res.coutTotal);
       const flux = [];
       for (let m = 1; m <= annee * 12; m++) {
         flux.push(loyerMensuel - res.mensualiteTotale - (res.charges / 12));
       }
-      // Ajouter prix de revente net - capital restant
       const idx = Math.min(annee * 12 - 1, res.amortissement.length - 1);
       const capRestant = idx >= 0 ? res.amortissement[idx].capitalRestant : 0;
-      flux[flux.length - 1] += rev.plusValueNette - capRestant;
+      const produitNetRevente = prixRevente - capRestant - impotPV;
+      flux[flux.length - 1] += produitNetRevente;
 
       // TRI annuel
       const fluxAnnuels = [];
@@ -2027,10 +2057,11 @@ function CalculateurTRI({ bien, res }) {
         fluxAnnuels.push(slice.reduce((s, v) => s + v, 0));
       }
       const tri = calculerTRI(fluxInitial, fluxAnnuels);
-      results.push({ annee, tri: Math.round(tri * 100) / 100, gainNet: Math.round(rev.gainTotal), prixRevente: Math.round(rev.prixRevente) });
+      const gainNet = produitNetRevente + flux.slice(0, -1).reduce((s,v)=>s+v,0);
+      results.push({ annee, tri: Math.round(tri * 100) / 100, gainNet: Math.round(gainNet), prixRevente: Math.round(prixRevente) });
     }
     return results;
-  }, [bien, res, tauxReval, loyerMensuel]);
+  }, [bien, res, tauxReval, loyerMensuel, valeurApresTravaux]);
 
   const triActuel = triData.find(d => d.annee === anneeRevente);
   const triMax = triData.length ? triData.reduce((a, b) => a.tri > b.tri ? a : b) : null;
@@ -2041,6 +2072,25 @@ function CalculateurTRI({ bien, res }) {
       <STitle accent={T.blue}>📊 Taux de Rendement Interne (TRI)</STitle>
 
       <Card style={{ padding: 18, marginBottom: 16 }}>
+        {/* Valeur après travaux */}
+        {bien.travaux > 0 && (
+          <div style={{ marginBottom: 16, background: T.surface3, border: `1px solid ${T.gold}30`, borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 11, color: T.gold, fontWeight: 700, textTransform: "uppercase", marginBottom: 8 }}>🔨 Valeur du bien après travaux</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+              {[bien.prix, bien.prix + bien.travaux, Math.round(bien.prix * 1.15 + bien.travaux)].map((v, i) => (
+                <button key={i} onClick={() => setValeurApresTravaux(v)} style={{ padding: "7px 4px", border: `1px solid ${valeurApresTravaux === v ? T.gold+"60" : T.border}`, borderRadius: 7, background: valeurApresTravaux === v ? T.gold+"18" : T.surface2, color: valeurApresTravaux === v ? T.gold : T.textMuted, fontWeight: 700, fontSize: 10, cursor: "pointer" }}>
+                  {i === 0 ? "Prix achat" : i === 1 ? "Prix + travaux" : "+15% travaux"}<br/>
+                  <span style={{ fontSize: 11 }}>{fmtEur(v)}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
+              <input type="text" inputMode="decimal" value={valeurApresTravaux} onChange={e => setValeurApresTravaux(parseFloat(e.target.value.replace(",",".")) || 0)} onFocus={e => e.target.select()} style={{ flex: 1, border: "none", background: "transparent", padding: "7px 10px", fontSize: 13, color: T.gold, fontWeight: 700, outline: "none" }} />
+              <span style={{ padding: "0 8px", fontSize: 11, color: T.textMuted }}>€ base revente</span>
+            </div>
+            <div style={{ fontSize: 10, color: T.textMuted, marginTop: 5 }}>La revalorisation annuelle s'applique à partir de cette valeur</div>
+          </div>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div>
             <label style={{ display: "block", fontSize: 11, color: T.textMuted, marginBottom: 6, textTransform: "uppercase", fontWeight: 600 }}>Revalorisation annuelle</label>
@@ -2279,7 +2329,7 @@ export default function App() {
   const handleSave = () => {
     const name = bien.nom || "Mon bien";
     const entry = { id: Date.now(), nom: name, date: new Date().toLocaleDateString("fr-FR"), data: bien };
-    const updated = [entry, ...savedBiens.filter(b => b.nom !== name)].slice(0, 20);
+    const updated = [entry, ...savedBiens.filter(b => b.id !== entry.id)].slice(0, 20);
     setSavedBiens(updated);
     saveToDB(updated);
     setSaveMsg("✅ Sauvegardé !");
@@ -2318,7 +2368,7 @@ export default function App() {
 
   const scoreColor = res.score >= 18 ? T.green : res.score >= 10 ? T.gold : T.red;
 
-  const TABS = [["simulateur","📊 Simulateur"],["diagnostic","🤖 IA"],["marchand","🏗️ Marchand"],["tri","📊 TRI"],["checklist","✅ Visite"],["travaux","🔨 Travaux"],["revente","📈 Revente"],["rentabilite","🎯 Rentabilité"],["fiscalite","🧾 Fiscalité"],["fiche","🏦 Fiche Bancaire"],["graphiques","📉 Graphiques"],["amortissement","🗓️ Amortissement"],["comparaison","⚖️ Comparaison"]];
+  const TABS = [["simulateur","📊 Simulateur"],["marchand","🏗️ Marchand"],["tri","📊 TRI"],["checklist","✅ Visite"],["travaux","🔨 Travaux"],["revente","📈 Revente"],["rentabilite","🎯 Rentabilité"],["fiscalite","🧾 Fiscalité"],["fiche","🏦 Fiche Bancaire"],["graphiques","📉 Graphiques"],["amortissement","🗓️ Amortissement"],["comparaison","⚖️ Comparaison"]];
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, fontFamily: "DM Sans, sans-serif", color: T.text }}>
